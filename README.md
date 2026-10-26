@@ -28,10 +28,6 @@ Run `/reload` afterward.
 
 Sign in through `/login` with the `openai-codex` provider, then select one of its models with `/model`.
 
-Example footer:
-
-```text
-Codex · 5h left 82% (resets in 2h) · 7d left 66% (resets in 3d)
-```
+![Codex quota and reset countdowns in Pi's footer](assets/usage-footer.png)
 
 Refreshes automatically every 60 seconds. Run `/usage` to refresh manually. Failed queries show the last result as `stale`, or `usage unknown` if no result is available.
