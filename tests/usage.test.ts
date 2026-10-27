@@ -39,6 +39,7 @@ function createHost(provider = "openai-codex", mode = "tui", oauth = true) {
   const events = new Map<string, Handler>();
   const commands = new Map<string, Command>();
   const statuses = new Map<string, string>();
+  const setWidget = vi.fn<ExtensionContext["ui"]["setWidget"]>();
   const setStatus = vi.fn<ExtensionContext["ui"]["setStatus"]>((key, text) => {
     if (text === undefined) statuses.delete(key);
     else statuses.set(key, text);
@@ -55,7 +56,7 @@ function createHost(provider = "openai-codex", mode = "tui", oauth = true) {
       isUsingOAuth,
       getProviderAuth,
     },
-    ui: { setStatus },
+    ui: { setStatus, setWidget },
   } as unknown as ExtensionCommandContext;
   const pi = {
     on: (name: string, handler: Handler) => events.set(name, handler),
@@ -65,6 +66,7 @@ function createHost(provider = "openai-codex", mode = "tui", oauth = true) {
   return {
     ctx,
     setStatus,
+    setWidget,
     getProviderAuth,
     isUsingOAuth,
     get status() {
@@ -73,20 +75,22 @@ function createHost(provider = "openai-codex", mode = "tui", oauth = true) {
     async emit(name: string, event: unknown = {}) {
       await events.get(name)?.(event, ctx);
     },
-    async command(name = "usage") {
+    async command(name = "usage", args = "") {
       const command = commands.get(name);
       if (!command) throw new Error(`Command /${name} is not registered`);
-      await command.handler("", ctx);
+      await command.handler(args, ctx);
     },
   };
 }
 
 beforeEach(() => {
+  vi.stubEnv("TZ", "UTC");
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -102,7 +106,8 @@ describe("Codex usage in Pi", () => {
     await host.emit("session_start");
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(host.status).toBe("Codex · 5h left 82% (resets in 2h) · 7d left 66% (resets in 3d)");
+    expect(host.status).toBe("Codex usage | 5h: 82% (reset 2:00 AM) | Weekly: 66% (reset Jan 4)");
+    expect(host.setWidget).not.toHaveBeenCalled();
   });
 
   it("refreshes the displayed quota with /usage", async () => {
@@ -117,7 +122,7 @@ describe("Codex usage in Pi", () => {
 
     await host.command();
 
-    expect(host.status).toBe("Codex · 5h left 49% (resets in 2h) · 7d left 66% (resets in 3d)");
+    expect(host.status).toBe("Codex usage | 5h: 49% (reset 2:00 AM) | Weekly: 66% (reset Jan 4)");
   });
 
   it("polls once per minute instead of continuously", async () => {
@@ -135,7 +140,7 @@ describe("Codex usage in Pi", () => {
     await vi.advanceTimersByTimeAsync(1);
 
     expect(fetchUsage).toHaveBeenCalledTimes(2);
-    expect(host.status).toContain("5h left 49%");
+    expect(host.status).toBe("Codex usage | 5h: 49% (reset 2:00 AM) | Weekly: 66% (reset Jan 4)");
   });
 
   it("does not block startup and shares overlapping manual refreshes", async () => {
@@ -158,7 +163,7 @@ describe("Codex usage in Pi", () => {
 
     respond(quotaResponse());
     await Promise.all([first, second]);
-    expect(host.status).toContain("5h left 82%");
+    expect(host.status).toBe("Codex usage | 5h: 82% (reset 2:00 AM) | Weekly: 66% (reset Jan 4)");
   });
 
   it("keeps the last good quota visibly stale after a failed refresh", async () => {
@@ -172,8 +177,9 @@ describe("Codex usage in Pi", () => {
 
     await host.command();
 
-    expect(host.status).toContain("5h left 82%");
-    expect(host.status).toContain("stale");
+    expect(host.status).toBe(
+      "Codex usage | 5h: 82% (reset 2:00 AM) | Weekly: 66% (reset Jan 4) | stale (0m old)",
+    );
   });
 
   it("shows unknown rather than treating an unsuccessful HTTP response as quota", async () => {
@@ -186,7 +192,7 @@ describe("Codex usage in Pi", () => {
     await host.emit("session_start");
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(host.status).toBe("Codex · usage unknown");
+    expect(host.status).toBe("Codex usage | unknown");
   });
 
   it.each([
@@ -205,7 +211,7 @@ describe("Codex usage in Pi", () => {
     await host.emit("session_start");
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(host.status).toBe("Codex · usage unknown");
+    expect(host.status).toBe("Codex usage | unknown");
   });
 
   it("backs off repeated failures and returns to minute polling after recovery", async () => {
@@ -225,8 +231,7 @@ describe("Codex usage in Pi", () => {
     await vi.advanceTimersByTimeAsync(239_999);
     expect(fetchUsage).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);
-    expect(host.status).toContain("5h left 82%");
-    expect(host.status).not.toContain("stale");
+    expect(host.status).toBe("Codex usage | 5h: 82% (reset 2:00 AM) | Weekly: 66% (reset Jan 4)");
     await vi.advanceTimersByTimeAsync(60_000);
     expect(fetchUsage).toHaveBeenCalledTimes(4);
   });
@@ -278,7 +283,7 @@ describe("Codex usage in Pi", () => {
     host.ctx.model = { ...host.ctx.model!, provider: "openai-codex" };
     await host.emit("model_select", { model: host.ctx.model });
     await vi.advanceTimersByTimeAsync(0);
-    expect(host.status).toContain("5h left 82%");
+    expect(host.status).toBe("Codex usage | 5h: 82% (reset 2:00 AM) | Weekly: 66% (reset Jan 4)");
   });
 
   it("clears the status and polling timer when the extension runtime shuts down", async () => {
@@ -319,7 +324,7 @@ describe("Codex usage in Pi", () => {
     await vi.advanceTimersByTimeAsync(1);
 
     expect(requestSignal?.aborted).toBe(true);
-    expect(host.status).toBe("Codex · usage unknown");
+    expect(host.status).toBe("Codex usage | unknown");
   });
 
   it("also bounds credential resolution and never sends a query with late credentials", async () => {
@@ -336,14 +341,14 @@ describe("Codex usage in Pi", () => {
     await host.emit("session_start");
 
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(host.status).toBe("Codex · usage unknown");
+    expect(host.status).toBe("Codex usage | unknown");
     await host.command();
-    expect(host.status).toContain("5h left 82%");
+    expect(host.status).toBe("Codex usage | 5h: 82% (reset 2:00 AM) | Weekly: 66% (reset Jan 4)");
 
     authenticate({ auth: { apiKey: token } });
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchUsage).toHaveBeenCalledTimes(1);
-    expect(host.status).not.toContain("stale");
+    expect(host.status).toBe("Codex usage | 5h: 82% (reset 2:00 AM) | Weekly: 66% (reset Jan 4)");
   });
 
   it.each(["180", "Thu, 01 Jan 2026 00:03:00 GMT"])(
@@ -367,7 +372,7 @@ describe("Codex usage in Pi", () => {
       expect(fetchUsage).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1);
       expect(fetchUsage).toHaveBeenCalledTimes(2);
-      expect(host.status).toContain("5h left 82%");
+      expect(host.status).toBe("Codex usage | 5h: 82% (reset 2:00 AM) | Weekly: 66% (reset Jan 4)");
     },
   );
 
@@ -405,7 +410,7 @@ describe("Codex usage in Pi", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(fetchUsage).not.toHaveBeenCalled();
-    expect(host.status).toBe("Codex · usage unknown");
+    expect(host.status).toBe("Codex usage | unknown");
   });
 
   it.each([
@@ -426,7 +431,7 @@ describe("Codex usage in Pi", () => {
 
     await host.command();
 
-    expect(host.status).toBe("Codex · usage unknown");
+    expect(host.status).toBe("Codex usage | unknown");
   });
 
   it("hides previous quota and stops polling when OAuth is no longer available", async () => {
@@ -472,10 +477,10 @@ describe("Codex usage in Pi", () => {
     await host.command();
 
     expect(fetchUsage).toHaveBeenCalledTimes(3);
-    expect(host.status).toContain("5h left 49%");
+    expect(host.status).toBe("Codex usage | 5h: 49% (reset 2:00 AM) | Weekly: 66% (reset Jan 4)");
   });
 
-  it("keeps day-scale reset countdowns informative after a minute elapses", async () => {
+  it("keeps absolute reset times stable without redrawing unchanged data", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => quotaResponse()),
@@ -484,12 +489,11 @@ describe("Codex usage in Pi", () => {
     await host.emit("session_start");
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(host.status).toBe(
-      "Codex · 5h left 82% (resets in 1h59m) · 7d left 66% (resets in 2d23h)",
-    );
+    expect(host.status).toBe("Codex usage | 5h: 82% (reset 2:00 AM) | Weekly: 66% (reset Jan 4)");
+    expect(host.setStatus).toHaveBeenCalledTimes(1);
   });
 
-  it("updates stale countdowns once a minute without bypassing network backoff", async () => {
+  it("updates stale age once a minute without bypassing network backoff", async () => {
     const fetchUsage = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(quotaResponse())
@@ -504,7 +508,21 @@ describe("Codex usage in Pi", () => {
 
     expect(fetchUsage).toHaveBeenCalledTimes(2);
     expect(host.status).toBe(
-      "Codex · 5h left 82% (resets in 1h59m) · 7d left 66% (resets in 2d23h) · stale (1m old)",
+      "Codex usage | 5h: 82% (reset 2:00 AM) | Weekly: 66% (reset Jan 4) | stale (1m old)",
     );
+  });
+
+  it("uses the local timezone for reset clocks and dates across date boundaries", async () => {
+    vi.stubEnv("TZ", "America/Los_Angeles");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => quotaResponse()),
+    );
+    const host = createHost();
+
+    await host.emit("session_start");
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(host.status).toBe("Codex usage | 5h: 82% (reset 6:00 PM) | Weekly: 66% (reset Jan 3)");
   });
 });

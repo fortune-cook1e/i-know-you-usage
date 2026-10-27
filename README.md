@@ -24,10 +24,20 @@ pi update git:github.com/fortune-cook1e/i-know-you-usage
 
 Run `/reload` afterward.
 
+## Uninstall globally
+
+```sh
+pi remove git:github.com/fortune-cook1e/i-know-you-usage
+```
+
+Restart Pi or run `/reload`. This removes the global install; the project extension still loads when running Pi inside a local checkout.
+
 ## Use
 
 Sign in through `/login` with the `openai-codex` provider, then select one of its models with `/model`.
 
-![Codex quota and reset countdowns in Pi's footer](assets/usage-footer.png)
+![Codex usage with remaining quota and reset times in Pi's footer](assets/usage-footer.png)
 
-Refreshes automatically every 60 seconds. Run `/usage` to refresh manually. Failed queries show the last result as `stale`, or `usage unknown` if no result is available.
+Percentages show remaining quota. Reset times and dates use your local timezone.
+
+Refreshes automatically every 60 seconds. Run `/usage` to refresh manually. Failed queries show the last result as `stale`, or `unknown` if no result is available.

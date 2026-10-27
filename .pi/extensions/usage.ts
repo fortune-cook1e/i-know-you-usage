@@ -51,11 +51,6 @@ function duration(milliseconds: number): string {
   return `${minutes}m`;
 }
 
-function formatWindow(window: QuotaWindow): string {
-  const label = duration(window.limit_window_seconds * 1_000);
-  return `${label} left ${100 - window.used_percent}% (resets in ${duration(window.reset_at * 1_000 - Date.now())})`;
-}
-
 function eligible(ctx: ExtensionContext): boolean {
   return (
     ctx.mode === "tui" &&
@@ -65,6 +60,12 @@ function eligible(ctx: ExtensionContext): boolean {
 }
 
 export default function usageExtension(pi: ExtensionAPI): void {
+  const timeFormat = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+  const dateFormat = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
   let timer: ReturnType<typeof setTimeout> | undefined;
   let inFlight: Promise<void> | undefined;
   let snapshot: { windows: QuotaWindow[]; fetchedAt: number; accountId: string } | undefined;
@@ -74,6 +75,14 @@ export default function usageExtension(pi: ExtensionAPI): void {
   let requestAbort: AbortController | undefined;
   let retryAt = 0;
   let displayed: string | undefined;
+
+  function formatWindow(window: QuotaWindow): string {
+    const weekly = window.limit_window_seconds === 604_800;
+    const label = weekly ? "Weekly" : duration(window.limit_window_seconds * 1_000);
+    const remaining = `${100 - window.used_percent}%`;
+    const reset = (weekly ? dateFormat : timeFormat).format(new Date(window.reset_at * 1_000));
+    return `${label}: ${remaining} (reset ${reset})`;
+  }
 
   function stop(ctx: ExtensionContext): void {
     generation++;
@@ -92,13 +101,12 @@ export default function usageExtension(pi: ExtensionAPI): void {
 
   function render(ctx: ExtensionContext): void {
     let text = snapshot
-      ? `Codex · ${snapshot.windows.map(formatWindow).join(" · ")}`
-      : "Codex · usage unknown";
-    if (snapshot && stale) text += ` · stale (${duration(Date.now() - snapshot.fetchedAt)} old)`;
-    if (text !== displayed) {
-      ctx.ui.setStatus(STATUS_KEY, text);
-      displayed = text;
-    }
+      ? `Codex usage | ${snapshot.windows.map(formatWindow).join(" | ")}`
+      : "Codex usage | unknown";
+    if (snapshot && stale) text += ` | stale (${duration(Date.now() - snapshot.fetchedAt)} old)`;
+    if (text === displayed) return;
+    ctx.ui.setStatus(STATUS_KEY, text);
+    displayed = text;
   }
 
   function schedule(ctx: ExtensionContext, delay: number): void {
